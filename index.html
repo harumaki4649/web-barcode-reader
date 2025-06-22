@@ -1,206 +1,260 @@
 <!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ISBN Scanner (Debug)</title>
+<title>📱 ISBN Scanner (Mobile)</title>
 <style>
-body { font-family: sans-serif; margin:0; padding:1em; background:#f5f5f5; }
-#viewport { position:relative; width:100%; max-width:480px; margin:auto;
-           border: 3px solid #007bff; border-radius:8px; overflow:hidden; }
-video { width:100%; height:auto; display:block; }
+body { 
+  font-family: sans-serif; margin:0; padding:0.5em; 
+  background:#f8f9fa; font-size:14px; 
+}
+
+/* カメラエリア - スマホで適切なサイズに */
+#viewport { 
+  position:relative; width:100%; max-width:400px; 
+  height:250px; margin:auto; border:2px solid #007bff; 
+  border-radius:8px; overflow:hidden; background:#000;
+}
+video { width:100%; height:100%; object-fit:cover; }
 canvas { position:absolute; top:0; left:0; }
-#debug { margin:1em 0; padding:1em; background:#fff; border-radius:8px;
-         font-size:12px; max-height:150px; overflow-y:auto; }
-#status { margin:0.5em 0; font-weight:bold; color:#007bff; text-align:center; }
-#list { margin-top:1em; max-height:200px; overflow-y:auto; }
-#list li { padding:8px; margin:4px 0; border-radius:4px; background:#fff; }
-.controls { margin:1em 0; text-align:center; }
-button { padding:0.8em 1.5em; margin:0 0.5em; border:none; border-radius:6px;
-         font-size:14px; font-weight:bold; }
+
+/* ガイド枠 */
+.guide { 
+  position:absolute; top:20%; left:15%; right:15%; bottom:20%;
+  border:2px dashed #00ff00; background:rgba(0,255,0,0.1);
+  pointer-events:none;
+}
+
+/* ステータス */
+#status { 
+  margin:0.8em 0; padding:0.6em; background:#fff; 
+  border-radius:6px; text-align:center; font-weight:bold; 
+  color:#007bff; box-shadow:0 2px 4px rgba(0,0,0,0.1);
+}
+
+/* コントロール */
+.controls { 
+  margin:1em 0; text-align:center; display:flex; 
+  flex-wrap:wrap; gap:0.5em; justify-content:center;
+}
+button { 
+  padding:0.7em 1.2em; border:none; border-radius:6px; 
+  font-size:13px; font-weight:bold; min-width:80px;
+}
 button:enabled { background:#007bff; color:white; cursor:pointer; }
 button:disabled { background:#ccc; color:#666; }
-.guide { position:absolute; top:30%; left:20%; right:20%; bottom:30%;
-         border:2px dashed #00ff00; background:rgba(0,255,0,0.1); }
+
+/* 結果リスト */
+#results { margin:1em 0; }
+#list { 
+  max-height:200px; overflow-y:auto; margin:0; padding:0; 
+  list-style:none; background:#fff; border-radius:6px;
+  box-shadow:0 2px 4px rgba(0,0,0,0.1);
+}
+#list li { 
+  padding:0.8em; border-bottom:1px solid #eee; 
+  display:flex; justify-content:space-between; align-items:center;
+}
+#list li:last-child { border-bottom:none; }
+
+/* デバッグエリア - 折りたたみ可能 */
+#debug-section { margin:1em 0; }
+#debug-toggle { 
+  background:#6c757d; color:white; width:100%; 
+  padding:0.6em; border:none; border-radius:6px; cursor:pointer;
+}
+#debug-content { 
+  display:none; margin-top:0.5em; padding:0.8em; 
+  background:#fff; border-radius:6px; font-size:11px; 
+  max-height:150px; overflow-y:auto; font-family:monospace;
+  box-shadow:0 2px 4px rgba(0,0,0,0.1);
+}
+
+/* レスポンシブ調整 */
+@media (max-width: 480px) {
+  body { padding:0.3em; }
+  #viewport { height:200px; }
+  .controls { gap:0.3em; }
+  button { padding:0.6em 1em; font-size:12px; min-width:70px; }
+}
 </style>
 
-<h2>📱 ISBN Scanner (Debug版)</h2>
+<h2 style="text-align:center; margin:0.5em 0;">📚 教科書スキャナー</h2>
 
 <div id="viewport">
   <div class="guide"></div>
 </div>
-<div id="status">📷 準備中...</div>
+
+<div id="status">📷 準備完了 - スキャン開始ボタンを押してください</div>
 
 <div class="controls">
-  <button id="btn-start">🚀 スキャン開始</button>
+  <button id="btn-start">🚀 開始</button>
   <button id="btn-stop" disabled>⏹ 停止</button>
   <button id="btn-clear">🗑 クリア</button>
 </div>
 
-<div id="debug">
-  <strong>🔧 デバッグ情報:</strong><br>
-  <div id="debug-log">待機中...</div>
+<div id="results">
+  <h3 style="margin:0.5em 0;">📖 検出結果:</h3>
+  <ul id="list"></ul>
 </div>
 
-<h3>📚 検出結果:</h3>
-<ul id="list"></ul>
+<div id="debug-section">
+  <button id="debug-toggle">🔧 デバッグ情報を表示</button>
+  <div id="debug-content"></div>
+</div>
 
 <script src="https://unpkg.com/quagga@0.12.1/dist/quagga.min.js"></script>
 <script>
 const viewport = document.getElementById('viewport');
 const status = document.getElementById('status');
-const debugLog = document.getElementById('debug-log');
+const debugContent = document.getElementById('debug-content');
 const list = document.getElementById('list');
 const counts = {};
 let isScanning = false;
 
+// デバッグ情報の表示切り替え
+document.getElementById('debug-toggle').onclick = () => {
+  const content = document.getElementById('debug-content');
+  const btn = document.getElementById('debug-toggle');
+  if (content.style.display === 'none') {
+    content.style.display = 'block';
+    btn.textContent = '🔧 デバッグ情報を非表示';
+  } else {
+    content.style.display = 'none';
+    btn.textContent = '🔧 デバッグ情報を表示';
+  }
+};
+
 function log(msg) {
   const time = new Date().toLocaleTimeString();
-  debugLog.innerHTML = `[${time}] ${msg}<br>` + debugLog.innerHTML;
+  debugContent.innerHTML = `[${time}] ${msg}<br>` + debugContent.innerHTML;
   console.log(msg);
 }
 
 function render() {
   if (Object.keys(counts).length === 0) {
-    list.innerHTML = '<li style="color:#999;">まだ検出されていません</li>';
+    list.innerHTML = '<li style="color:#999; justify-content:center;">まだ検出されていません</li>';
     return;
   }
   list.innerHTML = Object.entries(counts)
     .sort(([,a], [,b]) => b - a)
-    .map(([code, n]) => `<li>📖 <strong>${code}</strong> × ${n}</li>`)
-    .join('');
+    .map(([code, n]) => 
+      `<li>
+        <span>📖 <strong>${code}</strong></span>
+        <span style="background:#007bff; color:white; padding:0.2em 0.5em; border-radius:12px; font-size:11px;">×${n}</span>
+       </li>`
+    ).join('');
 }
 
-// 高品質設定
+// 改良された設定 - EAN-13に最適化
 const config = {
-  inputStream: {
-    name: "Live",
-    type: "LiveStream",
+  inputStream: { 
+    name: "Live", 
+    type: "LiveStream", 
     target: viewport,
-    constraints: {
+    constraints: { 
       facingMode: "environment",
-      width: { min: 640, ideal: 1280, max: 1920 },
-      height: { min: 480, ideal: 720, max: 1080 }
+      width: { min: 640, ideal: 800, max: 1280 },
+      height: { min: 480, ideal: 600, max: 720 }
     },
-    area: {    // 検出エリアを中央に限定
-      top: "30%", right: "20%", left: "20%", bottom: "30%"
+    area: {  // 緑枠エリアに対応
+      top: "20%", right: "15%", left: "15%", bottom: "20%"
     },
-    willReadFrequently: true  // パフォーマンス警告を解消
+    willReadFrequently: true
   },
-  frequency: 10,              // 検出頻度を上げる
-  numOfWorkers: 4,            // マルチスレッド
-  decoder: {
+  frequency: 8,                 // 検出頻度を調整
+  numOfWorkers: 2,              // モバイル向けに軽量化
+  decoder: { 
     readers: [
-      "ean_reader",           // EAN-13/8
-      "ean_8_reader",         // EAN-8専用
-      "code_128_reader"       // Code128 (念のため)
+      "ean_reader",             // EAN-13/EAN-8 (教科書のISBN)
+      "ean_8_reader"            // EAN-8専用
     ],
-    multiple: false           // 最初の1個だけ
+    multiple: false
   },
   locate: true,
   locator: {
-    patchSize: "medium",      // パッチサイズを中程度に
-    halfSample: false,        // 高品質モード
-    willReadFrequently: true  // Canvas最適化
+    patchSize: "medium",        // 教科書サイズに適した設定
+    halfSample: false           // 高品質モード
   },
   debug: {
-    drawBoundingBox: true,    // 境界ボックス表示
-    showFrequency: true,      // 検出頻度表示
-    drawScanline: true,       // スキャンライン表示
-    showPattern: true         // パターン表示
+    drawBoundingBox: true,      // 検出枠を表示
+    showFrequency: false,       // 頻度は非表示（モバイル用）
+    drawScanline: true,         // スキャンライン表示
+    showPattern: false          // パターンは非表示（軽量化）
   }
 };
 
 function onProcessed(result) {
-  const canvas = Quagga.canvas.dom.overlay;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-
   if (result) {
-    // 検出試行をログ
-    log(`📡 Processing: ${result.codeResult ? 'Found' : 'Searching'}...`);
-
-    if (result.boxes) {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      result.boxes.filter(box => box !== result.box).forEach(box => {
-        Quagga.ImageDebug.drawPath(box, {x: 0, y: 1}, ctx, {color: "green", lineWidth: 2});
-      });
-    }
-
-    if (result.box) {
-      Quagga.ImageDebug.drawPath(result.box, {x: 0, y: 1}, ctx, {color: "blue", lineWidth: 2});
-    }
-
-    if (result.codeResult && result.codeResult.drawPath) {
-      Quagga.ImageDebug.drawPath(result.codeResult.drawPath, {x: 'x', y: 'y'}, ctx, {color: 'red', lineWidth: 3});
-    }
+    log(`📡 Processing... ${result.codeResult ? '✅ Found' : '🔍 Searching'}`);
   }
 }
 
 function onDetected(result) {
   const code = result.codeResult.code;
   const format = result.codeResult.format;
-
-  log(`🎯 Detected: ${code} (${format})`);
-
-  // より厳密なISBN判定
-  if (!/^97[89]\d{10}$/.test(code)) {
-    log(`❌ Not ISBN: ${code}`);
-    status.textContent = `❌ ISBN以外: ${code} (${format})`;
+  
+  log(`🎯 Raw detection: ${code} (${format})`);
+  
+  // EAN-13 全般を受け入れ（ISBN以外も含む）
+  if (!/^\d{13}$/.test(code)) {
+    log(`❌ Not 13-digit EAN: ${code}`);
+    status.textContent = `❌ 13桁でない: ${code}`;
     return;
   }
-
-  // 品質チェック
-  const confidence = result.codeResult.decodedCodes.reduce((sum, code) => sum + (code.error || 0), 0);
-  log(`📊 Confidence: ${confidence.toFixed(2)}`);
-
+  
+  // ISBN判定は緩くする（978/979以外のEAN-13も受け入れる場合）
+  const isISBN = /^97[89]\d{10}$/.test(code);
+  const prefix = isISBN ? '📖 ISBN' : '🏷️ EAN-13';
+  
+  log(`✅ Valid EAN-13: ${code} ${isISBN ? '(ISBN)' : '(General)'}`);
+  
   counts[code] = (counts[code] || 0) + 1;
-  status.textContent = `✅ ${code} (${counts[code]}回目)`;
-
+  status.textContent = `✅ ${prefix}: ${code} (${counts[code]}回目)`;
+  
+  // フィードバック
   if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
   render();
 }
 
-function onError(err) {
-  log(`❌ Error: ${err.message || err}`);
-  status.textContent = `❌ エラー: ${err.message || err}`;
-}
-
 function startScanning() {
   if (isScanning) return;
-
-  status.textContent = '🔧 カメラ初期化中...';
-  log('🚀 Starting scanner...');
-
+  
+  status.textContent = '🔧 カメラを初期化中...';
+  log('🚀 Scanner starting...');
+  
   Quagga.init(config, err => {
     if (err) {
-      onError(err);
+      log(`❌ Init error: ${err.message || err}`);
+      status.textContent = `❌ エラー: ${err.message || err}`;
       return;
     }
-
-    log('✅ Camera initialized');
+    
+    log('✅ Camera ready');
     Quagga.start();
     isScanning = true;
-
+    
     // イベント登録
     Quagga.onProcessed(onProcessed);
     Quagga.onDetected(onDetected);
-
-    status.textContent = '🔍 バーコードを緑の枠内に合わせてください';
-    log('👀 Scanning started - バーコードを近づけてください');
-
+    
+    status.textContent = '🔍 教科書のバーコードを緑枠内に合わせてください';
+    log('👀 Scanning active - バーコードを近づけてください');
+    
     toggleButtons(true);
   });
 }
 
 function stopScanning() {
   if (!isScanning) return;
-
+  
   Quagga.offProcessed(onProcessed);
   Quagga.offDetected(onDetected);
   Quagga.stop();
-
+  
   isScanning = false;
   status.textContent = '⏹ スキャン停止';
   log('⏹ Scanner stopped');
-
+  
   toggleButtons(false);
 }
 
@@ -215,11 +269,11 @@ document.getElementById('btn-stop').onclick = stopScanning;
 document.getElementById('btn-clear').onclick = () => {
   Object.keys(counts).forEach(k => delete counts[k]);
   render();
-  debugLog.innerHTML = 'ログクリア';
-  status.textContent = '🗑 リストをクリアしました';
+  debugContent.innerHTML = '';
+  status.textContent = '🗑 データをクリアしました';
 };
 
 // 初期表示
 render();
-log('📱 Scanner ready - スキャン開始ボタンを押してください');
+log('📱 Mobile scanner ready');
 </script>
