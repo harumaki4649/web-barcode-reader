@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ISBN Scanner (Debug)</title>
+<style>
+body { font-family: sans-serif; margin:0; padding:1em; background:#f5f5f5; }
+#viewport { position:relative; width:100%; max-width:480px; margin:auto;
+           border: 3px solid #007bff; border-radius:8px; overflow:hidden; }
+video { width:100%; height:auto; display:block; }
+canvas { position:absolute; top:0; left:0; }
+#debug { margin:1em 0; padding:1em; background:#fff; border-radius:8px;
+         font-size:12px; max-height:150px; overflow-y:auto; }
+#status { margin:0.5em 0; font-weight:bold; color:#007bff; text-align:center; }
+#list { margin-top:1em; max-height:200px; overflow-y:auto; }
+#list li { padding:8px; margin:4px 0; border-radius:4px; background:#fff; }
+.controls { margin:1em 0; text-align:center; }
+button { padding:0.8em 1.5em; margin:0 0.5em; border:none; border-radius:6px;
+         font-size:14px; font-weight:bold; }
+button:enabled { background:#007bff; color:white; cursor:pointer; }
+button:disabled { background:#ccc; color:#666; }
+.guide { position:absolute; top:30%; left:20%; right:20%; bottom:30%;
+         border:2px dashed #00ff00; background:rgba(0,255,0,0.1); }
+</style>
+
+<h2>📱 ISBN Scanner (Debug版)</h2>
+
+<div id="viewport">
+  <div class="guide"></div>
+</div>
+<div id="status">📷 準備中...</div>
+
+<div class="controls">
+  <button id="btn-start">🚀 スキャン開始</button>
+  <button id="btn-stop" disabled>⏹ 停止</button>
+  <button id="btn-clear">🗑 クリア</button>
+</div>
+
+<div id="debug">
+  <strong>🔧 デバッグ情報:</strong><br>
+  <div id="debug-log">待機中...</div>
+</div>
+
+<h3>📚 検出結果:</h3>
+<ul id="list"></ul>
+
+<script src="https://unpkg.com/quagga@0.12.1/dist/quagga.min.js"></script>
+<script>
+const viewport = document.getElementById('viewport');
+const status = document.getElementById('status');
+const debugLog = document.getElementById('debug-log');
+const list = document.getElementById('list');
+const counts = {};
+let isScanning = false;
+
+function log(msg) {
+  const time = new Date().toLocaleTimeString();
+  debugLog.innerHTML = `[${time}] ${msg}<br>` + debugLog.innerHTML;
+  console.log(msg);
+}
+
+function render() {
+  if (Object.keys(counts).length === 0) {
+    list.innerHTML = '<li style="color:#999;">まだ検出されていません</li>';
+    return;
+  }
+  list.innerHTML = Object.entries(counts)
+    .sort(([,a], [,b]) => b - a)
+    .map(([code, n]) => `<li>📖 <strong>${code}</strong> × ${n}</li>`)
+    .join('');
+}
+
+// 高品質設定
+const config = {
+  inputStream: {
+    name: "Live",
+    type: "LiveStream",
+    target: viewport,
+    constraints: {
+      facingMode: "environment",
+      width: { min: 640, ideal: 1280, max: 1920 },
+      height: { min: 480, ideal: 720, max: 1080 }
+    },
+    area: {    // 検出エリアを中央に限定
+      top: "30%", right: "20%", left: "20%", bottom: "30%"
+    },
+    willReadFrequently: true  // パフォーマンス警告を解消
+  },
+  frequency: 10,              // 検出頻度を上げる
+  numOfWorkers: 4,            // マルチスレッド
+  decoder: {
+    readers: [
+      "ean_reader",           // EAN-13/8
+      "ean_8_reader",         // EAN-8専用
+      "code_128_reader"       // Code128 (念のため)
+    ],
+    multiple: false           // 最初の1個だけ
+  },
+  locate: true,
+  locator: {
+    patchSize: "medium",      // パッチサイズを中程度に
+    halfSample: false,        // 高品質モード
+    willReadFrequently: true  // Canvas最適化
+  },
+  debug: {
+    drawBoundingBox: true,    // 境界ボックス表示
+    showFrequency: true,      // 検出頻度表示
+    drawScanline: true,       // スキャンライン表示
+    showPattern: true         // パターン表示
+  }
+};
+
+function onProcessed(result) {
+  const canvas = Quagga.canvas.dom.overlay;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+  if (result) {
+    // 検出試行をログ
+    log(`📡 Processing: ${result.codeResult ? 'Found' : 'Searching'}...`);
+
+    if (result.boxes) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      result.boxes.filter(box => box !== result.box).forEach(box => {
+        Quagga.ImageDebug.drawPath(box, {x: 0, y: 1}, ctx, {color: "green", lineWidth: 2});
+      });
+    }
+
+    if (result.box) {
+      Quagga.ImageDebug.drawPath(result.box, {x: 0, y: 1}, ctx, {color: "blue", lineWidth: 2});
+    }
+
+    if (result.codeResult && result.codeResult.drawPath) {
+      Quagga.ImageDebug.drawPath(result.codeResult.drawPath, {x: 'x', y: 'y'}, ctx, {color: 'red', lineWidth: 3});
+    }
+  }
+}
+
+function onDetected(result) {
+  const code = result.codeResult.code;
+  const format = result.codeResult.format;
+
+  log(`🎯 Detected: ${code} (${format})`);
+
+  // より厳密なISBN判定
+  if (!/^97[89]\d{10}$/.test(code)) {
+    log(`❌ Not ISBN: ${code}`);
+    status.textContent = `❌ ISBN以外: ${code} (${format})`;
+    return;
+  }
+
+  // 品質チェック
+  const confidence = result.codeResult.decodedCodes.reduce((sum, code) => sum + (code.error || 0), 0);
+  log(`📊 Confidence: ${confidence.toFixed(2)}`);
+
+  counts[code] = (counts[code] || 0) + 1;
+  status.textContent = `✅ ${code} (${counts[code]}回目)`;
+
+  if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+  render();
+}
+
+function onError(err) {
+  log(`❌ Error: ${err.message || err}`);
+  status.textContent = `❌ エラー: ${err.message || err}`;
+}
+
+function startScanning() {
+  if (isScanning) return;
+
+  status.textContent = '🔧 カメラ初期化中...';
+  log('🚀 Starting scanner...');
+
+  Quagga.init(config, err => {
+    if (err) {
+      onError(err);
+      return;
+    }
+
+    log('✅ Camera initialized');
+    Quagga.start();
+    isScanning = true;
+
+    // イベント登録
+    Quagga.onProcessed(onProcessed);
+    Quagga.onDetected(onDetected);
+
+    status.textContent = '🔍 バーコードを緑の枠内に合わせてください';
+    log('👀 Scanning started - バーコードを近づけてください');
+
+    toggleButtons(true);
+  });
+}
+
+function stopScanning() {
+  if (!isScanning) return;
+
+  Quagga.offProcessed(onProcessed);
+  Quagga.offDetected(onDetected);
+  Quagga.stop();
+
+  isScanning = false;
+  status.textContent = '⏹ スキャン停止';
+  log('⏹ Scanner stopped');
+
+  toggleButtons(false);
+}
+
+function toggleButtons(scanning) {
+  document.getElementById('btn-start').disabled = scanning;
+  document.getElementById('btn-stop').disabled = !scanning;
+}
+
+// イベント登録
+document.getElementById('btn-start').onclick = startScanning;
+document.getElementById('btn-stop').onclick = stopScanning;
+document.getElementById('btn-clear').onclick = () => {
+  Object.keys(counts).forEach(k => delete counts[k]);
+  render();
+  debugLog.innerHTML = 'ログクリア';
+  status.textContent = '🗑 リストをクリアしました';
+};
+
+// 初期表示
+render();
+log('📱 Scanner ready - スキャン開始ボタンを押してください');
+</script>
